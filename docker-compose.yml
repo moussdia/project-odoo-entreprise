@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+    postgres:
+        container_name: postgres
+        environment:
+            POSTGRES_DB: ${POSTGRES_DB:-odoo}
+            POSTGRES_USER: ${POSTGRES_USER:-odoo}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+            PGDATA: /var/lib/postgresql/data/pgdata
+        image: postgres:${POSTGRES_VERSION:-10}
+        restart: always
+        volumes:
+          - odoo-postgres-data:/var/lib/postgresql/data/pgdata
+
+    backend:
+        build:
+            context: ./
+            dockerfile: docker/Dockerfile
+            args:
+                ODOO_VERSION: ${ODOO_VERSION:-14.0}
+                ODOO_RELEASE: ${ODOO_RELEASE:-20210427}
+                ODOO_SHA: ${ODOO_SHA:-9d8e8038d5589bc8f4f5f012773dba4deefd3adc}
+                ODOO_USER: ${ODOO_EE_USER:-veone}
+                ODOO_PASSWORD: ${ODOO_EE_PASSWORD:-Veone%401545}
+            target: ${BACKEND_TARGET:-dev}
+        command:
+          - "odoo"
+          - "--init=base,web_enterprise"
+          - "--db_host=postgres"
+          - "--db_port=5432"
+          - "--db_user=${POSTGRES_USER:-odoo}"
+          - "--db_password=${POSTGRES_PASSWORD:-odoo}"
+          - "--database=${POSTGRES_DB:-odoo}"
+#          - "--config=/etc/odoo/odoo.conf"
+        container_name: backend
+        depends_on:
+          - postgres
+        ports:
+          - ${BACKEND_PUBLISHED_PORT:-8069}:8069
+        restart: always
+        volumes:
+          - ./config:/etc/odoo
+          - ./addons:/mnt/extra-addons
+          - odoo-backend-data:/var/lib/odoo
+
+    adminer:
+        depends_on:
+          - postgres
+        image: adminer
+        ports:
+          - ${ADMINER_PUBLISHED_PORT:-9090}:8080
+        restart: always
+
+volumes:
+    odoo-backend-data:
+    odoo-postgres-data:

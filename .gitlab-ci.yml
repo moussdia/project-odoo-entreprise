@@ -1,0 +1,165 @@
+.build-template: &build-template
+    stage: build
+    script:
+      - docker build --build-arg ODOO_VERSION=$BUILD_VERSION --build-arg ODOO_RELEASE=$BUILD_RELEASE --build-arg ODOO_SHA=$BUILD_SHA --build-arg ODOO_USER=$BUILD_USER --build-arg ODOO_PASSWORD=$BUILD_PASSWORD --target $BUILD_TARGET -t $CI_REGISTRY_IMAGE:$BUILD_TARGET -f docker/Dockerfile .
+    after_script:
+      # Save the image as an artifact
+      - mkdir -p build/$CI_REGISTRY_IMAGE
+      - docker save $CI_REGISTRY_IMAGE:$BUILD_TARGET -o build/$CI_REGISTRY_IMAGE/$BUILD_TARGET.tar
+    artifacts:
+        name: $CI_JOB_NAME-${CI_COMMIT_SHA:0:8}
+        expire_in: 1 day
+        paths:
+          - build/$CI_REGISTRY_IMAGE
+    dependencies:
+#      - analysis-code
+      - analysis-dockerfile
+
+# Select image from https://hub.docker.com/_/php/
+image: docker:latest
+
+services:
+  - docker:dind
+
+stages:
+  - analysis
+  - build
+#  - test
+  - registry-update
+  - clean
+
+# Select what we should cache
+cache:
+    paths:
+      - vendor/
+
+variables:
+    # Configure mysql service (https://hub.docker.com/_/mysql/)
+#    MYSQL_ROOT_PASSWORD: root
+    ODOO_VERSION: "14.0"
+    ODOO_RELEASE: "20210427"
+    ODOO_SHA: "9d8e8038d5589bc8f4f5f012773dba4deefd3adc"
+    ODOO_USER: "veone"
+    ODOO_PASSWORD: "Veone%401545"
+
+before_script:
+  - export BUILD_VERSION=$ODOO_VERSION BUILD_RELEASE=$ODOO_RELEASE BUILD_SHA=$ODOO_SHA BUILD_USER=$ODOO_USER BUILD_PASSWORD=$ODOO_PASSWORD
+
+analysis-dockerfile:
+    stage: analysis
+    image: hadolint/hadolint:latest-alpine
+    script:
+      - hadolint docker/Dockerfile
+
+#analysis-code:
+#    stage: analysis
+#    image: php:$PHP_VERSION-alpine
+#    before_script:
+#      # Install composer
+#      - curl -sS https://getcomposer.org/installer | php
+#    script:
+#      # Validate composer.json and composer.lock
+#      - php composer.phar validate
+#      
+#      # Install all project dependencies
+#      - php composer.phar install --no-interaction --optimize-autoloader --classmap-authoritative
+#      
+#      # Coding standard
+#      - php composer.phar php-cs-fixer
+#      
+#      # Execute analyze
+#      - php composer.phar phpstan
+
+#build-test:
+#    <<: *build-template
+#    variables:
+#        BUILD_TARGET: test
+
+build-prod:
+    <<: *build-template
+    variables:
+        BUILD_TARGET: prod
+    only:
+      - master
+      - tags
+
+#test:
+#    stage: test
+##    variables:
+##        # Configure mysql service (https://hub.docker.com/_/mysql/)
+##        MYSQL_ROOT_PASSWORD: root
+#    before_script:
+#      # Load php image from the build stage
+#      - docker load -i build/$CI_REGISTRY_IMAGE/test.tar
+##      - source .env.test && printenv | sed 's/^\([^=]*\)\=\(.*\)$/\1\="\2"/g' | sed 's/^\(_\)\=\(.*\)$//g' > .env.test.local
+#    script:
+#      - docker run --env-file .env.test -e SYMFONY_DEPRECATIONS_HELPER=weak --rm $CI_REGISTRY_IMAGE:test sh -c 'echo "xdebug.mode=coverage" >> "$PHP_INI_DIR/conf.d/99-overrides.ini" && bin/phpunit --configuration phpunit.xml.dist --testdox --coverage-text --colors=never tests/'
+#    coverage: '/^\s*Lines:\s*\d+.\d+\%/'
+#    artifacts:
+#        paths:
+#          - var/log/
+#        expire_in: '30 mins'
+#        when: on_failure
+#    dependencies:
+#      - build-test
+
+registry-update-latest:
+    stage: registry-update
+    before_script:
+      # Load image from the build stage
+      - docker load -i build/$CI_REGISTRY_IMAGE/prod.tar
+    script:
+      # Tag the image
+      - docker tag $CI_REGISTRY_IMAGE:prod $CI_REGISTRY_IMAGE
+
+      # Push the image
+      - echo "$CI_REGISTRY_PASSWORD" | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+      - docker push $CI_REGISTRY_IMAGE
+    dependencies:
+      - build-prod
+    only:
+      - master
+
+registry-update-release:
+    stage: registry-update
+    before_script:
+      # Load image from the build stage
+      - docker load -i build/$CI_REGISTRY_IMAGE/prod.tar
+    script:
+      # Tag the image
+      - docker tag $CI_REGISTRY_IMAGE:prod $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+
+      # Push the image
+      - echo "$CI_REGISTRY_PASSWORD" | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+      - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+    dependencies:
+      - build-prod
+    only:
+      - tags
+
+clean:
+    stage: clean
+    script:
+      - docker container prune -f
+      - docker volume prune -f
+      - docker image prune -f
+    when: always
+    allow_failure: true
+
+#clean-test:
+#    stage: clean
+#    script:
+#      - docker rmi $CI_REGISTRY_IMAGE:test
+#    allow_failure: true
+#    needs:
+#      - build-test
+
+clean-prod:
+    stage: clean
+    script:
+      - docker rmi $CI_REGISTRY_IMAGE:prod
+    allow_failure: true
+    needs:
+      - build-prod
+    only:
+      - tags
